@@ -32,6 +32,7 @@ func get_event_socket(fileNameSocket string, nameEvent string) {
 	} else {
 		log.Printf("Lỗi từ công cụ %s", context)
 	}
+	os.Remove(fileNameSocket) // delete file after checked status
 }
 
 // Websocket connection
