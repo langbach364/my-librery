@@ -10,7 +10,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var broadCast = make(map[string]chan bool)
+var broadCast = make(map[string]chan bool) // lưu trữ tín hiệu
+
+// NOTE: broadCast[nameEvent] = make(chan bool, 1) 
+// Đảm bảo phải được khai báo đầu tiên nếu muốn sử dụng nếu không sẽ gặp bug không thể thêm tín hiệu
 
 // Socket connection
 // ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -32,7 +35,6 @@ func get_event_socket(fileNameSocket string, nameEvent string) {
 	} else {
 		log.Printf("Lỗi từ công cụ %s", context)
 	}
-	os.Remove(fileNameSocket) // delete file after checked status
 }
 
 // Websocket connection
@@ -44,8 +46,8 @@ var (
 		},
 	}
 
-	clients      = make(map[*websocket.Conn]string)
-	clientsMutex = &sync.Mutex{}
+	clients      = make(map[*websocket.Conn][]string) // các client đang kết nối
+	clientsMutex = &sync.Mutex{} // tạo ra để xử lý vài trường hợp từ goroutine
 )
 
 func connect_client(w http.ResponseWriter, r *http.Request) *websocket.Conn {
@@ -98,35 +100,51 @@ func send_message_client(conn *websocket.Conn, message interface{}) bool {
 		log.Println("Client đã mất kết nối tại địa chỉ:", conn.RemoteAddr())
 		conn.Close()
 		delete(clients, conn)
-		delete(broadCast, nameEvent)
+		for _, event := range nameEvent {
+			delete(broadCast, event)
+		}
 		return false
 	}
 	return true
 }
 
-func handle_connection(nameEvent string, conn *websocket.Conn) {
-	clients[conn] = nameEvent
-	broadCast[nameEvent] = make(chan bool, 1)
-
-	for {
-		printConnectionInfo() // kiểm tra dữ liệu
-
-		message := recive_message_client(conn)
-		if message == "" { 
-			break
-		}
-
-		check := send_message_client(conn, message)
-		if !check {
-			break
-		}
-
-		log.Printf("Đã gửi dữ liệu cho client")
+// Tạo tín hiệu 
+func create_broadcast(nameEvent string) {
+	if broadCast[nameEvent] == nil {
+		broadCast[nameEvent] = make(chan bool, 1)
 	}
+	broadCast[nameEvent] <- true
+}
 
-	delete(clients, conn)
-	delete(broadCast, nameEvent)
-	conn.Close()
+/// kiểm tra client còn sống hay không
+func check_client_alive(conn *websocket.Conn) {
+	go func() {
+		recive_message_client(conn)
+	}()
+}
+
+// xử lý mỗi khi có tín hiệu
+func handle_Websocket(nameEvent string) {
+	go func() {
+		for <-broadCast[nameEvent] {
+			clientsMutex.Lock()
+			for conn := range clients {
+				send_message_client(conn, "Dữ liệu từ server")
+			}
+			clientsMutex.Unlock()
+		}
+	}()
+}
+
+
+// DEMO xử lý
+func handle_connection(nameEvent string, conn *websocket.Conn) {
+	clients[conn] = append(clients[conn], nameEvent)
+
+	create_broadcast(nameEvent)
+
+	handle_Websocket(nameEvent)
+	check_client_alive(conn)
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
